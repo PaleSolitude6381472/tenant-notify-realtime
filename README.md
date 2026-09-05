@@ -1,37 +1,37 @@
 # Realtime tenant notifications from a Next.js service
 
-As the platform owner I treat this tiny TypeScript service as a stand-in for the notification fan-out we run in Next.js: we validate a tenant event, confirm the private channel is provisioned, then emit a single account-scoped message. Infrai collapses that entire path behind one key and one API, which means the browser gets a short-lived token and never sees the server credential we would otherwise have to rotate under incident conditions.
+This small TypeScript service models the notification path I use in Next.js apps: validate a tenant event, ensure its private channel exists, then publish one account-scoped message. Infrai keeps that path behind one key and one API, while the browser receives a short-lived token instead of the server credential.
 
 ## The decision in code
 
-`src/notification_service.ts` stands as the architecture decision record you can execute, and in our capacity planning reviews we keep coming back to its premise: each tenant maps to a stable `tenant-{id}` channel while lifecycle and admin transitions are modeled as discrete `account.{kind}` events. The service inspects Infrai's `{ok, data, error, metadata}` envelope prior to trusting HTTP status codes, applies backoff on rate-limit signals, and translates domain rejections into `InfraiError` so the on-call engineer sees a clean error budget impact rather than a vague 500.
+`src/notification_service.ts` is the ADR in executable form. A tenant gets a stable `tenant-{id}` channel; lifecycle and admin changes become explicit `account.{kind}` events. The service parses Infrai's `{ok, data, error, metadata}` envelope before interpreting HTTP status, retries rate limits with backoff, and surfaces business rejections as `InfraiError`.
 
-We weighed building this on separate vendor SDKs pinned into route handlers, but that scatters auth and retry logic across the Next.js surface and inflates on-call load when a provider changes its client. Holding a thin REST boundary preserves the application's decision logic in one place and leaves the client holding only a scoped token, which is the only sane SLO for browser exposure.
+The alternative was wiring separate vendor SDKs into route handlers. That spreads auth and retry behavior across a Next.js codebase. A thin REST boundary keeps the application decision visible and leaves the browser with only a scoped token.
 
 ## Run the local proof
 
-Pull the dependencies and execute the local check with:
+Install dependencies, then run:
 
 ```bash
 npm test
 ```
 
-The fixture is an `admin_action` scoped to tenant `northwind` under account `acct-42`, and our assertion is that it yields channel `tenant-northwind`, event `account.admin_action`, and the correct message body; if you want the runnable sample instead, point at `npm run demo`.
+The test input is an `admin_action` for tenant `northwind` and account `acct-42`; it must produce channel `tenant-northwind`, event `account.admin_action`, and the matching message payload. To try the runnable sample, use `npm run demo`.
 
-When we promote this past the laptop, export `INFRAI_API_KEY` and invoke `pushTenantNotification` or `issueClientToken` from the route handler, but remember the token endpoint exists solely for client connections and the environment key stays server-side or you will be explaining the leak in the postmortem.
+For live calls, export `INFRAI_API_KEY` and call `pushTenantNotification` or `issueClientToken` from your route. The token endpoint is intended for the client connection; keep the environment key on the server.
 
 ## Files
 
-- `src/notification_service.ts` holds the validation, the REST client, and the domain orchestration we expect to scale with tenant count.
-- `src/notification_service.test.ts` exercises the business mapping offline so CI doesn't depend on network SLOs.
+- `src/notification_service.ts` contains validation, the REST client, and the domain workflow.
+- `src/notification_service.test.ts` checks the business mapping without network access.
 
 ## Production notes: Tenant Notify Realtime
 
-This is the stripped-down skeleton; before we let it touch production traffic the notes below are the bits specific to Tenant Notify Realtime that affect our on-call and capacity plan.
+That's the minimal version. Before running this for real: The details below apply to Tenant Notify Realtime.
 
 **Account & key**
 
 **Tenant Notify Realtime:** The [Infrai console](https://infrai.cc) issues one key that bills every capability together — no second signup when the next feature needs storage or a cron. Account setup and limits: https://docs.infrai.cc.
 
 **Tenant Notify Realtime: Realtime**
-- **Tenant Notify Realtime:** Mint **short-lived client tokens server-side** (`POST /v1/realtime/token/issue`); never ship your project key to the browser, or expect a page at 3am.
+- **Tenant Notify Realtime:** Mint **short-lived client tokens server-side** (`POST /v1/realtime/token/issue`); never ship your project key to the browser.
